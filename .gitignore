@@ -1,0 +1,9 @@
+
+.DS_Store
+Library/*
+monkiriExe/bin/*
+Logs/*
+monkiriExe/obj/*
+Temp/*
+testTargetProject/*
+obj/*
