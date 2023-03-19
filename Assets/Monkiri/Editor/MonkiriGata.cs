@@ -47,12 +47,23 @@ namespace MonkiriGata.Core
                         int sampleInt = 0;
                         #endif
                     }
+
+                    public enum Something
+                    {
+                        A,
+                        B,
+                        C
+                    }
                 }";
 
+            var symbols = PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildPipeline.GetBuildTargetGroup(EditorUserBuildSettings.activeBuildTarget));
+            var symbolsWithEditorSymbol = symbols + ",UNITY_EDITOR";
+            Format(code, symbolsWithEditorSymbol);
 
-            Format(code, "UNITY_EDITOR");
 
+            return;
 
+            // 続きで、プロジェクトを複数個パースする。
             var testTargetProjectFolderPath = "./testTargetProject";
 
             foreach (string filePath in Directory.GetFiles(testTargetProjectFolderPath, "*.cs", SearchOption.AllDirectories))
@@ -62,7 +73,7 @@ namespace MonkiriGata.Core
                 Debug.Log("filePath:" + filePath + " fileContent:" + fileContent);
                 try
                 {
-                    Format(fileContent, "UNITY_EDITOR");
+                    Format(fileContent, symbolsWithEditorSymbol);
                 }
                 catch (Exception e)
                 {
@@ -134,11 +145,13 @@ namespace MonkiriGata.Core
             var isNewLine = false;
             var isInFor = false;
             var isInForCount = 0;
+            var isInEnumReady = false;
+            var isInEnum = false;
             foreach (var tokenAndKind in tokenAndKinds)
             {
                 var token = tokenAndKind.Token;
                 var kind = tokenAndKind.Kind;
-                // Debug.Log("レイアウト時 token:" + token + " isNewLine:" + isNewLine + " kokomade:" + builder.ToString());
+                Debug.Log("レイアウト時 token:" + token + "-" + kind + " isInEnum:" + isInEnum + " isNewLine:" + isNewLine + " kokomade:" + builder.ToString());
 
                 // 空のものは飛ばす
                 if (string.IsNullOrEmpty(token))
@@ -165,27 +178,42 @@ namespace MonkiriGata.Core
                 switch (kind)
                 {
                     case SK.OpenBraceToken:// {
-                        // ここだ、{の位置に種類がある。newLineの場合は改行しないでいい。
+                        // {の位置に種類がある。newLineの場合は改行しないでいい。
                         if (isNewLine)
                         {
                             // pass.
                         }
                         else
                         {
+                            // 改行する。
                             builder.AppendLine();
                         }
+
                         builder.AppendTokenWithIndent(token, indentLevel);
                         indentLevel++;
                         builder.AppendLine();
 
                         isNewLine = true;
+
+                        if (isInEnumReady)
+                        {
+                            isInEnum = true;
+                        }
                         break;
+
                     case SK.CloseBraceToken:// }
                         indentLevel--;
                         builder.AppendTokenWithIndent(token, indentLevel);
                         builder.AppendLine();
 
                         isNewLine = true;
+
+                        // とじかっこがあったらenumが終わる。
+                        if (isInEnum)
+                        {
+                            isInEnum = false;
+                            isInEnumReady = false;
+                        }
                         break;
 
                     case SK.SemicolonToken:
@@ -321,6 +349,8 @@ namespace MonkiriGata.Core
                     case SK.PragmaWarningDirectiveTrivia:
                     case SK.RegionDirectiveTrivia:
                     case SK.EndRegionDirectiveTrivia:
+                    case SK.WarningDirectiveTrivia:
+                    case SK.DefineDirectiveTrivia:
                         builder.AppendTokenWithIndent(token, indentLevel);
                         builder.AppendLine();
                         isNewLine = true;
@@ -338,6 +368,10 @@ namespace MonkiriGata.Core
                     case SK.StringKeyword:
                     case SK.StringLiteralToken:
                     case SK.LessThanToken:
+                    case SK.GreaterThanGreaterThanEqualsToken:
+                    case SK.InterpolatedStringStartToken:
+                    case SK.InterpolatedStringTextToken:
+                    case SK.InterpolatedStringEndToken:
                     case SK.EqualsToken:
                     case SK.NewKeyword:
                     case SK.PlusToken:
@@ -345,6 +379,8 @@ namespace MonkiriGata.Core
                     case SK.PublicKeyword:
                     case SK.DelegateKeyword:
                     case SK.GreaterThanToken:
+                    case SK.GreaterThanGreaterThanToken:
+                    case SK.LessThanLessThanToken:
                     case SK.IntKeyword:
                     case SK.ObjectKeyword:
                     case SK.StructKeyword:
@@ -377,7 +413,6 @@ namespace MonkiriGata.Core
                     case SK.ForEachKeyword:
                     case SK.InKeyword:
                     case SK.BreakKeyword:
-                    case SK.EnumKeyword:
                     case SK.ConstKeyword:
                     case SK.PlusEqualsToken:
                     case SK.WhereKeyword:
@@ -434,10 +469,41 @@ namespace MonkiriGata.Core
                     case SK.AbstractKeyword:
                     case SK.TildeToken:
                     case SK.DisabledTextTrivia:
+                    case SK.AddKeyword:
+                    case SK.RemoveKeyword:
+                    case SK.CaretEqualsToken:
+                    case SK.CaretToken:
+                    case SK.GlobalKeyword:
+                    case SK.ColonColonToken:
+                    case SK.QuestionQuestionToken:
+                    case SK.DoKeyword:
+                    case SK.EnumKeyword:
                         // case SK.
                         // case SK.
                         // case SK.
-                        // case SK.
+
+                        if (isInEnum)
+                        {
+                            if (kind == SK.CommaToken)
+                            {
+                                // pass.
+                            }
+                            else
+                            {
+                                // TODO: ここが難しい。書き込みタイミングに関わってくる。
+                                // // ,以外の要素がきたら、改行してから要素を入れる。
+                                // Debug.Log("isInEnum kind:" + kind);
+                                // builder.AppendLine();
+                                // isNewLine = true;
+                            }
+                        }
+
+                        // この中だけ、,の後のtokenで改行する。
+                        if (kind == SK.EnumKeyword)
+                        {
+                            isInEnumReady = true;
+                        }
+
                         // 直前のものがtokenだったり,だったらスペースを開ける
                         if (ShouldAddSpeceBefore(before, kind))
                         {
@@ -445,11 +511,13 @@ namespace MonkiriGata.Core
                             continue;
                         }
 
-                        // この中だけ;が改行しない
+                        // forの中だけ;が改行しないモードに入る
                         if (kind == SK.ForKeyword)
                         {
                             isInFor = true;
                         }
+
+
 
                         // 新規の行であればindentを見る
                         if (isNewLine)
@@ -475,10 +543,10 @@ namespace MonkiriGata.Core
                         break;
 
                     // 括弧類
-                    case SK.OpenParenToken:
-                    case SK.CloseParenToken:
-                    case SK.OpenBracketToken:
-                    case SK.CloseBracketToken:
+                    case SK.OpenParenToken:// (
+                    case SK.CloseParenToken:// )
+                    case SK.OpenBracketToken:// [
+                    case SK.CloseBracketToken:// ]
                         // forの中だけ、()の一致を見て、0になった瞬間にforが終わっているので、ここ以外では;に改行力を持たせる。
                         if (isInFor)
                         {
@@ -567,11 +635,13 @@ namespace MonkiriGata.Core
                 case SK.PragmaWarningDirectiveTrivia:
                 case SK.RegionDirectiveTrivia:
                 case SK.EndRegionDirectiveTrivia:
+                case SK.WarningDirectiveTrivia:
                     return false;
 
                 // このグループが前方に来ている場合、スペースを開ける
                 case SK.IdentifierToken:
                 case SK.NumericLiteralToken:
+                case SK.UIntKeyword:
                 case SK.UsingKeyword:
                 case SK.NamespaceKeyword:
                 case SK.ClassKeyword:
@@ -632,6 +702,25 @@ namespace MonkiriGata.Core
                 case SK.StructKeyword:
                 case SK.AmpersandToken:
                 case SK.RefKeyword:
+                case SK.InterpolatedStringTextToken:
+                case SK.InterpolatedStringStartToken:
+                case SK.BarToken:
+                case SK.CaretToken:
+                case SK.ByteKeyword:
+                case SK.CharacterLiteralToken:
+                case SK.UShortKeyword:
+                case SK.IsKeyword:
+                case SK.QuestionQuestionToken:
+                case SK.GetKeyword:
+                case SK.AbstractKeyword:
+                case SK.InterpolatedStringEndToken:
+                case SK.SetKeyword:
+                case SK.DelegateKeyword:
+                case SK.EventKeyword:
+                // case SK.
+                // case SK.
+                // case SK.
+                // case SK.
                 // case SK.
 
                 case SK.CloseBracketToken:
