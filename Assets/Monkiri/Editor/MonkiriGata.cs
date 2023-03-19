@@ -12,7 +12,7 @@ namespace MonkiriGata.Core
     [InitializeOnLoad]
     class MonkiriGata
     {
-        public const string INDENT = "    ";
+        public const string INDENT = "    ";// 4スペース
 
         static MonkiriGata()
         {
@@ -20,7 +20,7 @@ namespace MonkiriGata.Core
 
             // C# code to parse
             string code = @"
-                // コメントとかってどうなるんだろ? 全部消される、、？
+                // コメントとかってどうなるんだろ? 全部消される、、？ -> 残せるようになった。
                 using Systeaaaam;
 
                 namespace MyNamespace
