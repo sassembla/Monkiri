@@ -35,35 +35,51 @@ namespace MonkiriGata.Core
                         {
                             Console./*やめて欲しいレベルのインライン*/WriteLine(""Hello,\n world!"");
                         }
+
+                        /// ドキュメントコメントフォーマット
+                        void Something()
+                        {
+
+                        }
+
+                        #if UNITY_EDITOR
+                        // コメントと
+                        int sampleInt = 0;
+                        #endif
                     }
                 }";
 
-            Format(code);
-            // var testTargetProjectFolderPath = "./testTargetProject";
 
-            // foreach (string filePath in Directory.GetFiles(testTargetProjectFolderPath, "*.cs", SearchOption.AllDirectories))
-            // {
-            //     // .csファイルを1つずつ読み込み、リストに追加する
-            //     var fileContent = File.ReadAllText(filePath);
-            //     Debug.Log("filePath:" + filePath + " fileContent:" + fileContent);
-            //     try
-            //     {
-            //         Format(fileContent);
-            //     }
-            //     catch (Exception e)
-            //     {
-            //         Debug.LogError("filePath:" + filePath + " e:" + e);
-            //         return;
-            //     }
-            // }
+            Format(code, "UNITY_EDITOR");
+
+
+            var testTargetProjectFolderPath = "./testTargetProject";
+
+            foreach (string filePath in Directory.GetFiles(testTargetProjectFolderPath, "*.cs", SearchOption.AllDirectories))
+            {
+                // .csファイルを1つずつ読み込み、リストに追加する
+                var fileContent = File.ReadAllText(filePath);
+                Debug.Log("filePath:" + filePath + " fileContent:" + fileContent);
+                try
+                {
+                    Format(fileContent, "UNITY_EDITOR");
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError("filePath:" + filePath + " e:" + e);
+                    return;
+                }
+            }
         }
 
-
-        private static void Format(string code)
+        /*
+            フォーマット処理
+        */
+        private static void Format(string code, params string[] defines)
         {
             var exePath = "./monkiriExe/bin/Release/net7.0/osx-arm64/publish/monkiriGate";
             var process = new D.Process();
-            process.StartInfo.Arguments = Convert.ToBase64String(Encoding.UTF8.GetBytes(code));
+            process.StartInfo.Arguments = Convert.ToBase64String(Encoding.UTF8.GetBytes(code)) + " " + string.Join(",", defines);
             process.StartInfo.FileName = exePath;
             process.StartInfo.UseShellExecute = false;
             process.StartInfo.RedirectStandardOutput = true;
@@ -79,10 +95,7 @@ namespace MonkiriGata.Core
                 Debug.Log("failed to read AST from code. error:" + error);
                 return;
             }
-
-            Debug.Log("output:" + output);
-            return;
-
+            // Debug.Log("output:" + output);
 
             var tokenAndKinds = new List<TokenAndKindAndLocation>();
             var lines = output.Split('\n');
@@ -90,15 +103,29 @@ namespace MonkiriGata.Core
             // EoF tokenまで読む
             for (var i = 0; i < lines.Length; i += 3)
             {
-                var tokenAndKindAndLoc = new TokenAndKindAndLocation(lines[i], lines[i + 1], lines[i + 2]);
+                var tokenLine = Encoding.UTF8.GetString(Convert.FromBase64String(lines[i]));
+                var kindLine = lines[i + 1];
+                var location = lines[i + 2];
+
+                // Debug.Log("token:" + tokenLine + " kind:" + kindLine + " location:" + location);
+
+                var isContinued = false;
+                if ((i + 2) + 3 < lines.Length && IsEndLineContinues(location, lines[(i + 2) + 3]))
+                {
+                    isContinued = true;
+                }
+
+
+                var tokenAndKindAndLoc = new TokenAndKindAndLocation(tokenLine, kindLine, isContinued);
+                // Debug.Log("token:" + tokenAndKindAndLoc.Token + " kind:" + tokenAndKindAndLoc.Kind + " continued:" + tokenAndKindAndLoc.IsContinedToAnotherToken + " location:" + location);
+
                 tokenAndKinds.Add(tokenAndKindAndLoc);
+
                 if (tokenAndKindAndLoc.IsEoF())
                 {
                     break;
                 }
             }
-            return;
-
 
             // ASTからコードを構築する。
             var builder = new StringBuilder();
@@ -109,8 +136,9 @@ namespace MonkiriGata.Core
             var isInForCount = 0;
             foreach (var tokenAndKind in tokenAndKinds)
             {
-                var token = tokenAndKind.token;
-                var kind = tokenAndKind.kind;
+                var token = tokenAndKind.Token;
+                var kind = tokenAndKind.Kind;
+                // Debug.Log("レイアウト時 token:" + token + " isNewLine:" + isNewLine + " kokomade:" + builder.ToString());
 
                 // 空のものは飛ばす
                 if (string.IsNullOrEmpty(token))
@@ -137,7 +165,15 @@ namespace MonkiriGata.Core
                 switch (kind)
                 {
                     case SK.OpenBraceToken:// {
-                        builder.AppendLine();
+                        // ここだ、{の位置に種類がある。newLineの場合は改行しないでいい。
+                        if (isNewLine)
+                        {
+                            // pass.
+                        }
+                        else
+                        {
+                            builder.AppendLine();
+                        }
                         builder.AppendTokenWithIndent(token, indentLevel);
                         indentLevel++;
                         builder.AppendLine();
@@ -161,6 +197,133 @@ namespace MonkiriGata.Core
                             builder.AppendLine();
                             isNewLine = true;
                         }
+                        break;
+
+                    case SK.SingleLineCommentTrivia:
+                        if (isNewLine)
+                        {
+                            builder.AppendTokenWithIndent(token, indentLevel);
+                        }
+                        else
+                        {
+                            builder.Append(token);
+                        }
+
+                        // singleLineは必ず改行する必要がある
+                        builder.AppendLine();
+                        isNewLine = true;
+                        break;
+
+                    case SK.SingleLineDocumentationCommentTrivia:
+                        if (isNewLine)
+                        {
+                            builder.AppendTokenWithIndent("/// " + token, indentLevel);
+                        }
+                        else
+                        {
+                            builder.Append("/// " + token);
+                        }
+
+                        // ドキュメントはなぜかデフォルトで改行が含まれる。不思議。
+                        isNewLine = true;
+                        break;
+
+                    case SK.MultiLineCommentTrivia:
+                        var multilineCommentTokenLines = token.Split('\n');
+
+                        var lastIndex = multilineCommentTokenLines.Length - 1;
+
+                        var contentLines = new List<string>();
+
+                        // /*
+                        var firstLine = multilineCommentTokenLines[0];
+                        contentLines.Add(firstLine);
+
+                        // 複数行ある場合
+                        if (1 < multilineCommentTokenLines.Length)
+                        {
+                            for (var i = 0; i < Mathf.Max(lastIndex - 1, 0); i++)
+                            {
+                                var middleLine = multilineCommentTokenLines[1 + i];
+
+                                // [ ]コメント
+                                contentLines.Add(INDENT + middleLine.TrimStart(' ', '\t'));
+                            }
+
+                            // [ ]*/
+                            var lastLine = " " + multilineCommentTokenLines[lastIndex].TrimStart(' ', '\t');
+                            contentLines.Add(lastLine);
+                        }
+
+                        if (isNewLine)
+                        {
+                            // 複数行が新しい行で始まるので、すべての行をappendすればいい。
+                            for (var i = 0; i < contentLines.Count; i++)
+                            {
+                                var commentToken = contentLines[i];
+                                builder.AppendTokenWithIndent(commentToken, indentLevel);
+                                // 最終行未満の行には改行を加える
+                                if (i < contentLines.Count - 1)
+                                {
+                                    builder.AppendLine();
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // TODO: 途中からの継続で改行が入る場合はわかんないけど非常に嫌なコード書かれてそうなので、このケースに遭遇したら何かしよう。
+                            Debug.LogWarning((contentLines.Count == 1) + "途中からで複数行コメント");
+                            var commentToken = string.Join("\n", contentLines);
+                            builder.Append(commentToken);
+                        }
+
+                        if (tokenAndKind.IsContinedToAnotherToken)
+                        {
+                            // 別のtokenにつながっているのでnewLine判定は終わりになる。
+                            isNewLine = false;
+                            break;
+                        }
+
+                        builder.AppendLine();
+                        isNewLine = true;
+                        break;
+
+                    case SK.MultiLineDocumentationCommentTrivia:
+                        if (isNewLine)
+                        {
+                            builder.AppendTokenWithIndent("/*" + token, indentLevel);
+                        }
+                        else
+                        {
+                            builder.Append("/*" + token);
+                        }
+
+                        if (tokenAndKind.IsContinedToAnotherToken)
+                        {
+                            // 別のtokenにつながっているのでnewLine判定は終わりになる。
+                            isNewLine = false;
+                            break;
+                        }
+
+                        builder.AppendLine();
+                        isNewLine = true;
+                        break;
+
+                    case SK.IfDirectiveTrivia:
+                    case SK.ElifDirectiveTrivia:
+                    case SK.ElseDirectiveTrivia:
+                    case SK.EndIfDirectiveTrivia:
+                        builder.Append(token);
+                        builder.AppendLine();
+                        isNewLine = true;
+                        break;
+
+                    case SK.PragmaWarningDirectiveTrivia:
+                    case SK.RegionDirectiveTrivia:
+                    case SK.EndRegionDirectiveTrivia:
+                        builder.AppendTokenWithIndent(token, indentLevel);
+                        builder.AppendLine();
+                        isNewLine = true;
                         break;
 
                     // identifier, NumericLiteralToken など
@@ -270,7 +433,7 @@ namespace MonkiriGata.Core
                     case SK.DecimalKeyword:
                     case SK.AbstractKeyword:
                     case SK.TildeToken:
-                        // case SK.
+                    case SK.DisabledTextTrivia:
                         // case SK.
                         // case SK.
                         // case SK.
@@ -378,6 +541,7 @@ namespace MonkiriGata.Core
 
             switch (beforeKind)
             {
+                // このグループが前方に来ている場合、スペースを開けない
                 case SK.None:
                 case SK.SemicolonToken:
                 case SK.DotToken:
@@ -385,12 +549,27 @@ namespace MonkiriGata.Core
                 case SK.OpenParenToken:
                 case SK.CloseParenToken:
                 case SK.OpenBracketToken:
-                // case SK.CloseBracketToken:
+                // case SK.CloseBracketToken: close ] は.などがつながる場合がある。
                 case SK.OpenBraceToken:
                 case SK.CloseBraceToken:
                 case SK.ExclamationToken:
+
+                case SK.SingleLineCommentTrivia:
+                case SK.SingleLineDocumentationCommentTrivia:
+                case SK.MultiLineCommentTrivia:
+                case SK.MultiLineDocumentationCommentTrivia:
+
+                case SK.IfDirectiveTrivia:
+                case SK.ElifDirectiveTrivia:
+                case SK.ElseDirectiveTrivia:
+                case SK.EndIfDirectiveTrivia:
+
+                case SK.PragmaWarningDirectiveTrivia:
+                case SK.RegionDirectiveTrivia:
+                case SK.EndRegionDirectiveTrivia:
                     return false;
 
+                // このグループが前方に来ている場合、スペースを開ける
                 case SK.IdentifierToken:
                 case SK.NumericLiteralToken:
                 case SK.UsingKeyword:
@@ -454,10 +633,6 @@ namespace MonkiriGata.Core
                 case SK.AmpersandToken:
                 case SK.RefKeyword:
                 // case SK.
-                // case SK.
-                // case SK.
-                // case SK.
-                // case SK.
 
                 case SK.CloseBracketToken:
                     return true;
@@ -468,31 +643,45 @@ namespace MonkiriGata.Core
 
             return false;
         }
+
+        private static bool IsEndLineContinues(string currentLocation, string nextLocation)
+        {
+            var locationInfo = currentLocation.Split(',');
+            var nextLocationInfo = nextLocation.Split(',');
+            if (locationInfo[2] == nextLocationInfo[0])
+            {
+                return true;
+            }
+
+            return false;
+        }
     }
 
     public struct TokenAndKindAndLocation
     {
-        public readonly string token;
-        public readonly SK kind;
+        public readonly string Token;
+        public readonly SK Kind;
+        public readonly bool IsContinedToAnotherToken;
 
-        public TokenAndKindAndLocation(string tokenLine, string kindLine, string locationLine)
+        public TokenAndKindAndLocation(string tokenLine, string kindLine, bool isContinedToAnotherToken)
         {
-            this.token = tokenLine;
+            this.Token = tokenLine;
             if (Enum.TryParse<SK>(kindLine, false, out var k))
             {
-                this.kind = k;
+                this.Kind = k;
             }
             else
             {
-                Debug.Log("parse failed, token:" + token);
-                this.kind = SK.OutOfKind;
+                Debug.LogError("parse failed, token:" + Token);
+                this.Kind = SK.OutOfKind;
             }
-            Debug.Log("tokenLine:" + tokenLine + " locationLine:" + locationLine);
+
+            this.IsContinedToAnotherToken = isContinedToAnotherToken;
         }
 
         public bool IsEoF()
         {
-            return kind == SK.EndOfFileToken;
+            return Kind == SK.EndOfFileToken;
         }
     }
 
